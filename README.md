@@ -38,3 +38,12 @@ cat /var/lib/ispsupport-node/update.json
 Проверка выполняется каждый час с задержкой до 120 секунд. Для немедленной проверки можно запустить `systemctl start ispsupport-node-update.service`.
 Обновление допускает только fast-forward. Ошибка сети, локальные изменения или расхождение истории останавливают обновление; локальная конфигурация и данные остаются на месте.
 Таймер обновляет файлы репозитория. Запуск сервисов и миграции будущего приложения должны быть добавлены отдельным выпуском.
+
+
+## Device checks
+
+The primary gateway supplies an explicit device batch through its SSH connection to the node. `scripts/monitor.py` runs ICMP, public-key SSH (`show version | no-more` for Junos), and SNMP v2c system OID checks on the node. The primary application does not connect to equipment. Devices with monitoring disabled are excluded from batches. Network inventory never triggers subnet scanning.
+
+SSH uses the node root account's existing private keys with a limited equipment username; equipment username `root` is rejected. First-seen device host keys are stored in `/var/lib/ispsupport-node/device_known_hosts`; changed host keys stop authentication. SNMP requires the `snmp` client package, installed by `scripts/install.sh`; no SNMP daemon is installed. Community values are read from a temporary mode-0600 file and are never passed in process arguments. Client configuration and credentials remain outside this repository.
+
+The initial gateway selects up to 20 enabled devices per node every five minutes, oldest check first, using eight bounded concurrent workers. This is a basic availability/access check, not interface traffic collection or alerting. After setting credentials and firewall rules, enable polling in the device card.
