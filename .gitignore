@@ -1,0 +1,10 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+data/
+config.local.json
+*.sqlite
+*.sqlite3
+*.pem
+*.key

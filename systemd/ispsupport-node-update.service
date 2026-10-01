@@ -1,0 +1,16 @@
+[Unit]
+Description=Update shared ISP Support node code
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /ispsupport/node/scripts/update.py
+WorkingDirectory=/ispsupport/node
+TimeoutStartSec=10min
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/ispsupport/node /var/lib/ispsupport-node /run/lock
