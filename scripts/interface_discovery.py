@@ -66,7 +66,7 @@ class Snmp:
             return values
 
 
-def static_units(xml):
+def interface_configuration(xml):
     start = xml.find('<')
     if start < 0 or '<!DOCTYPE' in xml or '<!ENTITY' in xml:
         raise ValueError('Invalid configuration XML')
@@ -80,19 +80,35 @@ def static_units(xml):
     if not configurations:
         raise ValueError('Configuration XML not returned; verify read-only permissions')
     units = set()
+    aggregates = {}
     for config in configurations:
         for interface in config.findall('./interfaces/interface'):
             name = (interface.findtext('name') or '').strip()
             if not SAFE_NAME.fullmatch(name) or FORBIDDEN.match(name) or 'inactive' in interface.attrib:
                 continue
+            if PHYSICAL.fullmatch(name):
+                aggregates[name] = None
+                for options in interface:
+                    if options.tag not in ('ether-options', 'gigether-options', 'fastether-options') or 'inactive' in options.attrib:
+                        continue
+                    for setting in options.findall('ieee-802.3ad'):
+                        bundle = setting.find('bundle')
+                        if 'inactive' not in setting.attrib and bundle is not None and 'inactive' not in bundle.attrib:
+                            value = (bundle.text or '').strip()
+                            if LAG.fullmatch(value):
+                                aggregates[name] = value
             for unit in interface.findall('unit'):
                 number = (unit.findtext('name') or '').strip()
                 if number.isdecimal() and 'inactive' not in unit.attrib:
                     units.add(name + '.' + number)
-    return units
+    return {'units': units, 'aggregates': aggregates}
 
 
-def read_static_units(device):
+def static_units(xml):
+    return interface_configuration(xml)['units']
+
+
+def read_interface_configuration(device):
     username = device.get('ssh_username') or ''
     if username == 'root' or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', username):
         raise ValueError('Limited SSH username required for static units')
@@ -109,7 +125,11 @@ def read_static_units(device):
             '-o', 'StrictHostKeyChecking=accept-new', '-o', f'UserKnownHostsFile={known}',
             '-o', 'ConnectTimeout=4', '-o', 'ConnectionAttempts=1', '-p', str(port), '-l', username, host,
             'show configuration interfaces | display inheritance | display xml | no-more']
-    return static_units(bounded_command(args, 15))
+    return interface_configuration(bounded_command(args, 15))
+
+
+def read_static_units(device):
+    return read_interface_configuration(device)['units']
 
 
 def classify(name, junos, allowed_units, fixed_names=None):
@@ -141,14 +161,19 @@ def discover(device, previous=None):
     junos = (device.get('os_name') or '').lower() == 'junos'
     verified = not junos
     allowed = set()
+    aggregates = {}
+    aggregate_checked_at = None
     warning = None
     if junos:
         try:
-            allowed = read_static_units(device)
+            configuration = read_interface_configuration(device)
+            allowed = configuration['units']
+            aggregates = configuration['aggregates']
+            aggregate_checked_at = int(time.time())
             verified = True
         except (ValueError, RuntimeError, ET.ParseError):
             allowed = {name for name, port in previous.items() if port.get('kind') == 'unit' and port.get('static_verified')}
-            warning = 'Статические юниты не подтверждены по SSH; новые юниты не добавляются'
+            warning = 'Конфигурация интерфейсов не подтверждена по SSH; предыдущие юниты и состав AE сохранены'
     fixed = set(device.get('fixed_ports', [])) if not device.get('discover_ports', True) else None
     selected = []
     for oid, name in table.items():
@@ -180,6 +205,13 @@ def discover(device, previous=None):
                         static_verified=verified if port['kind'] == 'unit' else True, present=True)
             if port['kind'] == 'unit' and not verified:
                 port['static_verified'] = True  # Only previously verified names reached this point.
+            if junos and port['kind'] == 'physical':
+                if verified:
+                    port.update(aggregate=aggregates.get(port['name']), aggregate_checked_at=aggregate_checked_at)
+                else:
+                    old = previous.get(port['name'], {})
+                    if old.get('aggregate_checked_at'):
+                        port.update(aggregate=old.get('aggregate'), aggregate_checked_at=old['aggregate_checked_at'])
             ports[port['name']] = port
     if not ports:
         raise RuntimeError('No eligible interfaces returned; previous inventory preserved')

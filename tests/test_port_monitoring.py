@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
-from interface_discovery import Snmp, classify, static_units
+from interface_discovery import Snmp, classify, static_units, interface_configuration, discover, IF_NAME, IF_TYPE, IF_SPEED, IF_ALIAS
 from port_history import aggregate
 from zabbix_sync import item_definition, item_key, reconcile, snapshot
 from zabbix_api import private_json
@@ -23,6 +23,34 @@ class PortMonitoringTest(unittest.TestCase):
         self.assertEqual('unit', classify('et-0/0/0.100', True, allowed))
         self.assertIsNone(classify('et-0/0/0.200', True, allowed))
         self.assertIsNone(classify('demux0.1000', True, allowed))
+
+    def test_configuration_reports_physical_members_and_ignores_inactive_bundles(self):
+        xml = """<rpc-reply xmlns="urn:junos"><configuration><interfaces>
+        <interface><name>et-0/0/1</name><ether-options><ieee-802.3ad><bundle>ae0</bundle></ieee-802.3ad></ether-options></interface>
+        <interface><name>xe-1/1/0</name><gigether-options><ieee-802.3ad><bundle>ae1</bundle></ieee-802.3ad></gigether-options></interface>
+        <interface><name>xe-2/1/0</name><gigether-options><ieee-802.3ad><bundle>ae1</bundle></ieee-802.3ad></gigether-options></interface>
+        <interface><name>et-0/0/2</name><ether-options inactive="inactive"><ieee-802.3ad><bundle>ae2</bundle></ieee-802.3ad></ether-options></interface>
+        <interface inactive="inactive"><name>et-0/0/3</name><ether-options><ieee-802.3ad><bundle>ae3</bundle></ieee-802.3ad></ether-options></interface>
+        <interface><name>ae1</name><unit><name>444</name></unit></interface>
+        </interfaces></configuration></rpc-reply>"""
+        data = interface_configuration(xml)
+        self.assertEqual({'et-0/0/1': 'ae0', 'xe-1/1/0': 'ae1', 'xe-2/1/0': 'ae1', 'et-0/0/2': None}, data['aggregates'])
+        self.assertEqual({'ae1.444'}, data['units'])
+
+    def test_failed_configuration_read_preserves_known_aggregate_and_verified_removal_clears_it(self):
+        device = {'host': '192.0.2.1', 'os_name': 'Junos', 'snmp_community': 'fixture'}
+        previous = {'et-0/0/1': {'kind': 'physical', 'aggregate': 'ae0', 'aggregate_checked_at': 123}}
+        responses = [{IF_NAME+'.5': 'et-0/0/1'}, {IF_TYPE+'.5': '6', IF_SPEED+'.5': '10000', IF_ALIAS+'.5': ''}]
+        with patch('interface_discovery.Snmp.query', side_effect=responses), patch('interface_discovery.read_interface_configuration', side_effect=RuntimeError()):
+            ports, status = discover(device, previous)
+        self.assertEqual('ae0', ports['et-0/0/1']['aggregate'])
+        self.assertEqual(123, ports['et-0/0/1']['aggregate_checked_at'])
+        self.assertFalse(status['static_verified'])
+        with patch('interface_discovery.Snmp.query', side_effect=responses), patch('interface_discovery.read_interface_configuration', return_value={'units': set(), 'aggregates': {'et-0/0/1': None}}):
+            ports, status = discover(device, previous)
+        self.assertIsNone(ports['et-0/0/1']['aggregate'])
+        self.assertGreater(ports['et-0/0/1']['aggregate_checked_at'], 123)
+        self.assertTrue(status['static_verified'])
 
     def test_fixed_inventory_and_root_ssh_are_not_used_for_unknown_interfaces(self):
         self.assertIsNone(classify('et-0/0/1', True, set(), {'et-0/0/0'}))

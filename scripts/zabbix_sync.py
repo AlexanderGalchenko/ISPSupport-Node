@@ -197,7 +197,7 @@ def snapshot(config):
         items = {row['key_']: row for row in rows}
         ports = []
         for name, port in entry.get('ports', {}).items():
-            value = {k: port.get(k) for k in ('name', 'index', 'kind', 'parent', 'speed_bps', 'description', 'static_verified', 'present', 'last_seen', 'missing_since')}
+            value = {k: port.get(k) for k in ('name', 'index', 'kind', 'parent', 'aggregate', 'aggregate_checked_at', 'speed_bps', 'description', 'static_verified', 'present', 'last_seen', 'missing_since')}
             metrics = {}
             for metric in METRICS:
                 item = items.get(item_key(name, metric), {})
