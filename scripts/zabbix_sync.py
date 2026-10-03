@@ -80,6 +80,33 @@ def sync_host(api, config, device, old, group_id):
     return {**old, 'host_id': host_id, 'interface_id': interface_id, 'config_hash': fingerprint, 'enabled': True, 'last_attempt': 0}
 
 
+def sync_subscribers(api, entry, device):
+    wanted = 'bras' in device.get('roles', []) and (device.get('os_name') or '').lower() == 'junos'
+    if entry.get('subscriber_enabled', False) is wanted:
+        return
+    items = api.call('item.get', {'hostids': [entry['host_id']], 'filter': {'key_': 'isp.device.subscribers'}, 'output': ['itemid']})
+    definition = {'name': 'Активные абонентские сессии', 'key_': 'isp.device.subscribers',
+                  'hostid': entry['host_id'], 'interfaceid': entry['interface_id'], 'type': 20, 'value_type': 3,
+                  'snmp_oid': '.1.3.6.1.4.1.2636.3.64.1.1.1.2.0', 'delay': '60s', 'history': '14d', 'trends': '365d',
+                  'status': 0, 'tags': [{'tag': 'component', 'value': 'subscribers'}, {'tag': 'isp:managed', 'value': '1'}]}
+    if wanted:
+        api.call('item.update', {'itemid': items[0]['itemid'], **definition}) if items else api.call('item.create', definition)
+    elif items:
+        api.call('item.update', {'itemid': items[0]['itemid'], 'status': 1})
+    entry['subscriber_enabled'] = wanted
+
+
+def subscriber_snapshot(api, config, entries):
+    configured = {str(d['id']): d for d in config.get('snmp_devices', config.get('devices', [])) if 'bras' in d.get('roles', [])}
+    hosts = {str(e['host_id']): key for key, e in entries.items() if key in configured and e.get('enabled') and e.get('subscriber_enabled')}
+    if not hosts:
+        return []
+    rows = api.call('item.get', {'hostids': list(hosts), 'filter': {'key_': 'isp.device.subscribers'},
+                              'output': ['hostid', 'lastvalue', 'lastclock', 'state', 'status']})
+    return [{'id': int(hosts[r['hostid']]), 'value': int(r['lastvalue']), 'clock': int(r['lastclock'])}
+            for r in rows if r.get('state') == '0' and r.get('status') == '0' and int(r.get('lastclock', 0)) > 0]
+
+
 def sync_items(api, entry, discovered):
     old_ports = entry.get('ports', {})
     existing = api.call('item.get', {'hostids': [entry['host_id']], 'output': ['itemid', 'key_', 'status'], 'search': {'key_': 'isp.if.'}, 'startSearch': True})
@@ -136,6 +163,7 @@ def reconcile(config, state, api, group_id):
         entry = entries.get(device_id, {})
         try:
             entry = sync_host(api, config, device, entry, group_id)
+            sync_subscribers(api, entry, device)
             interval = 300 if entry.get('error') else 900
             if budget and now - entry.get('last_attempt', 0) >= interval:
                 budget -= 1
@@ -179,7 +207,7 @@ def snapshot(config):
             value['metrics'] = metrics
             ports.append(value)
         results.append({'id': device['id'], 'checked_at': entry.get('last_success'), 'message': entry.get('error') or entry.get('discovery', {}).get('message'), 'ports': ports})
-    return {'status': 'ready', 'updated_at': state['updated_at'], 'devices': results}
+    return {'status': 'ready', 'updated_at': state['updated_at'], 'devices': results, 'subscribers': subscriber_snapshot(api, config, state.get('devices', {}))}
 
 
 def main():
