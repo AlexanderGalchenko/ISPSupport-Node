@@ -1,0 +1,11 @@
+[Unit]
+Description=Synchronize ISP Support Zabbix inventory every minute
+
+[Timer]
+OnBootSec=40
+OnUnitInactiveSec=60
+AccuracySec=5
+Unit=ispsupport-zabbix-sync.service
+
+[Install]
+WantedBy=timers.target

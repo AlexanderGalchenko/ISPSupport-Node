@@ -1,0 +1,17 @@
+[Unit]
+Description=Reconcile ISP Support interface inventory with local Zabbix
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/etc/ispsupport-node/node.json
+ConditionPathExists=/etc/ispsupport-node/zabbix-api.json
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /ispsupport/node/scripts/zabbix_sync.py
+TimeoutStartSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ispsupport-node /run/lock
+UMask=0077

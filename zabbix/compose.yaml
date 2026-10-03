@@ -1,0 +1,52 @@
+name: ispsupport-zabbix
+services:
+  db:
+    image: ${ISP_POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    env_file: /etc/ispsupport-node/zabbix.env
+    volumes:
+      - /var/lib/ispsupport-node/zabbix/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U zabbix -d zabbix"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 2g
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  server:
+    image: ${ISP_ZABBIX_SERVER_IMAGE:-zabbix/zabbix-server-pgsql:alpine-7.0-latest}
+    restart: unless-stopped
+    env_file: /etc/ispsupport-node/zabbix.env
+    environment:
+      DB_SERVER_HOST: db
+      ZBX_CACHESIZE: 128M
+      ZBX_HISTORYCACHESIZE: 32M
+      ZBX_VALUECACHESIZE: 64M
+      ZBX_STARTSNMPPOLLERS: '2'
+      ZBX_TIMEOUT: '4'
+      ZBX_HOUSEKEEPINGFREQUENCY: '1'
+      ZBX_MAXHOUSEKEEPERDELETE: '10000'
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 1g
+    logging: *logging
+  web:
+    image: ${ISP_ZABBIX_WEB_IMAGE:-zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest}
+    restart: unless-stopped
+    env_file: /etc/ispsupport-node/zabbix.env
+    environment:
+      DB_SERVER_HOST: db
+      ZBX_SERVER_HOST: server
+      PHP_TZ: UTC
+      ZBX_SERVER_NAME: ISP Support node
+    ports:
+      - 127.0.0.1:18080:8080
+    depends_on:
+      - server
+    mem_limit: 512m
+    logging: *logging
