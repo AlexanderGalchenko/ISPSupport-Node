@@ -158,7 +158,8 @@ def discover(device, previous=None):
     table = snmp.query([IF_NAME], walk=True)
     if not table or len(table) > 20000:
         raise RuntimeError('Interface name table empty or exceeds 20000 entries; previous inventory preserved')
-    junos = (device.get('os_name') or '').lower() == 'junos'
+    profile = device.get('ssh_profile')
+    junos = profile == 'junos' if profile and profile != 'auto' else (device.get('os_name') or '').strip().lower() == 'junos'
     verified = not junos
     allowed = set()
     aggregates = {}
