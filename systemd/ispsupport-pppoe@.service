@@ -1,0 +1,21 @@
+[Unit]
+Description=ISP Support isolated PPPoE session (%i)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/ispsupport-node/pppoe/%i.json
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -u /ispsupport/node/scripts/pppoe.py run %i
+WorkingDirectory=/var/lib/ispsupport-node/pppoe
+Restart=no
+KillMode=mixed
+TimeoutStopSec=180s
+UMask=0077
+StandardInput=null
+# This process must move a dedicated NIC and create persistent network namespaces.
+# Do not use PrivateNetwork, PrivateMounts or mount-namespace sandboxing here.
+# Existing /etc/ppp hooks and host DNS are hidden by ip netns exec in the engine.
+
+[Install]
+WantedBy=multi-user.target

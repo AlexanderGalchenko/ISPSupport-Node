@@ -1,0 +1,11 @@
+[Unit]
+Description=Check an existing PPPoE session every five minutes (%i)
+
+[Timer]
+OnActiveSec=5min
+OnUnitActiveSec=5min
+AccuracySec=5s
+Unit=ispsupport-pppoe-probe@%i.service
+
+[Install]
+WantedBy=timers.target

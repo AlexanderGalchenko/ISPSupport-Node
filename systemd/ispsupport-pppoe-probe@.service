@@ -1,0 +1,8 @@
+[Unit]
+Description=Request checks on an existing PPPoE session (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /ispsupport/node/scripts/pppoe.py probe %i
+TimeoutStartSec=30s
+UMask=0077

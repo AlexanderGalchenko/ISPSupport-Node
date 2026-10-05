@@ -1,5 +1,83 @@
 # ISP Support Node
 
+## Изолированные PPPoE-сессии
+
+`scripts/pppoe.py` управляет тестовыми каналами ноды. Для каждого профиля создаётся
+network namespace `isp-pppoe-<profile>` со своими маршрутами и DNS. Выделенная
+Ethernet NIC переносится туда целиком с сохранением MAC. Интерфейс с глобальным
+IP, маршрутом, master/child-связью или сетевым менеджером не используется.
+Проверки: IPv4 ping, DNS, HTTPS www.yandex.ru и ICMP с DF для MTU.
+
+Установка отдельно от обновления Git, от root:
+
+```sh
+bash /ispsupport/node/scripts/install-pppoe.sh
+```
+
+Локальный профиль `/etc/ispsupport-node/pppoe/lab.json` (root:root 600), пример
+с вымышленными адресами:
+
+```json
+{
+  "schema": 1,
+  "interface": "eth1",
+  "expected_mac": "02:00:00:00:00:01",
+  "bras_label": "lab",
+  "bras_address": "192.0.2.10",
+  "bras_port": "et-0/0/0.123",
+  "transport_vlan": 123,
+  "vlan": null,
+  "ac": "LAB_AC",
+  "env_file": "/etc/ispsupport-node/pppoe/lab.env",
+  "ping": ["8.8.4.4", "8.8.8.8", "77.88.8.8"],
+  "skip_initial_tests": false
+}
+```
+
+`vlan: null` означает нетегированный Ethernet **внутри гостя**. `transport_vlan`
+документирует внешний транспорт и не добавляет тег в госте. Опциональные `device_id`,
+`expected_ac_mac` и `note` уточняют привязку. IP/порт BRAS — запись инвентаризации,
+не доказательство фактического подключения к этому порту. `expected_ac_mac`
+сравнивается с наблюдаемым AC в status, но не является фильтром PPPoE.
+
+В `/etc/ispsupport-node/pppoe/lab.env` (root:root 600) задаются `PPPOE_USERNAME`
+и `PPPOE_PASSWORD`. Значения литеральные, файл не исполняется оболочкой;
+пароль не передаётся в argv дочерних процессов. Профили и секреты не коммитятся.
+
+```sh
+ispsupport-pppoe check lab     # предварительная проверка без изменения сети
+ispsupport-pppoe start lab     # подключение, первый тест, затем удержание
+ispsupport-pppoe status lab    # JSON: привязка, systemd, состояние и результаты
+ispsupport-pppoe probe lab     # запрос тестов в существующей сессии
+ispsupport-pppoe schedule lab  # проверки каждые 5 минут
+ispsupport-pppoe quiet lab     # отключить таймер, сохранить сессию
+ispsupport-pppoe stop lab      # отключить таймер, завершить PPP, вернуть NIC
+```
+
+`probe` асинхронный: результат появится в `last_test` после завершения проверок.
+Занятая/ещё не поднятая/завершённая сессия пропускается, не запускается заново.
+`Restart=no`, `nopersist` и отсутствие автоматического старта сессии после reboot
+позволяют наблюдать отключения от биллинга. После отключения нужен явный `start`.
+Для старта без первого раунда трафика задайте `skip_initial_tests: true`.
+В тихом режиме остаются LCP keepalive и локальное наблюдение раз в 5 секунд.
+Ping/HTTPS не измеряют тарифную скорость и не подтверждают применение RADIUS CoA;
+нужны данные с BRAS и отдельный согласованный тест скорости.
+
+Отчёты: `/var/lib/ispsupport-node/pppoe/<profile>/current.json` указывает на run;
+`runs/<run-id>/` содержит `result.json`, `probe-*.json`, `events.jsonl`, приватный
+`pppd.log`, снимки интерфейса/маршрутов и `RECOVERY.txt`. Сохраняются привязка
+и Git revision каждого запуска. Старые отчёты автоматически не удаляются.
+Логи закрыты для других пользователей и могут содержать логин.
+Диагностика: `journalctl -u ispsupport-pppoe@lab -n 80 --no-pager`.
+
+Обычная остановка возвращает NIC, сверяет маршруты/rules/DNS хоста и сохраняет
+`cleanup_ok`. При SIGKILL/падении питания следуйте `RECOVERY.txt`; не удаляйте
+namespace до завершения оставшихся процессов. Для отката остановите профиль,
+проверьте `cleanup_ok`, восстановите unit/CLI из `install-backup-*` в каталоге
+состояния и выполните `systemctl daemon-reload`. Код откатывается revert-коммитом
+через штатное fast-forward обновление, без сброса рабочей копии.
+Обновление Git и повторная установка не перезапускают поднятые сессии.
+
 Базовый репозиторий клиентских нод ISP Support.
 
 ## Размещение
