@@ -66,7 +66,7 @@ from urllib.parse import urlsplit
 
 ENV = dict(os.environ, LC_ALL="C", LANG="C", SYSTEMD_COLORS="0",
            SYSTEMD_PAGER="cat")
-VERSION = "3.2"
+VERSION = "3.2.1"
 for _credential_key in ("PPPOE_USERNAME", "PPPOE_PASSWORD"):
     ENV.pop(_credential_key, None)
 
@@ -357,12 +357,15 @@ class Test:
         self.report["control_capture"] = {"pcap": str(pcap), "log": str(logpath),
                                           "max_seconds": 75, "max_packets": 1000,
                                           "filter": packet_filter}
-        with logpath.open("w") as log:
+        # Open the private output as the controller, then inherit the descriptor.
+        # tcpdump may drop privileges normally; -Z root with -w crashes in some
+        # Debian/Ubuntu 4.99.4 builds (Debian #1078771, Ubuntu #2071891).
+        with logpath.open("w") as log, pcap.open("wb") as output:
             self.capture = subprocess.Popen(["ip", "netns", "exec", self.ns,
                 "timeout", "--signal=INT", "--kill-after=3", "75", "tcpdump",
-                "-Z", "root", "-n", "-p", "-U", "-s", "2048", "-c", "1000",
-                "-i", nic, "-w", str(pcap), packet_filter], stdin=subprocess.DEVNULL,
-                stdout=log, stderr=subprocess.STDOUT, env=ENV, start_new_session=True)
+                "-n", "-p", "-U", "-s", "2048", "-c", "1000",
+                "-i", nic, "-w", "-", packet_filter], stdin=subprocess.DEVNULL,
+                stdout=output, stderr=log, env=ENV, start_new_session=True)
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
             if self.capture.poll() is not None:
