@@ -16,6 +16,7 @@ MAX_SESSION = 16 * 1024 * 1024
 COMMANDS = {
     'screen-length 0 temporary', 'display version', 'display vsi verbose',
     'display mpls ldp session', 'display eth-trunk', 'display mac-address',
+    'display lldp neighbor', 'display lldp local',
 }
 VSI_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z')
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')

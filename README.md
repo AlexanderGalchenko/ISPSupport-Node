@@ -128,6 +128,31 @@ cat /var/lib/ispsupport-node/update.json
 
 ## Device checks
 
+### LLDP topology
+
+`scripts/lldp_collect.py` collects local LLDP identity and neighbor tables over SSH
+from explicitly configured Junos and Huawei VRP devices. It uses the existing
+limited account and node keys. Commands are read-only; discovered neighbors are
+not automatically scanned or added to inventory. Junos uses XML; Huawei uses
+bounded, prompt-checked CLI output. Numeric remote port IDs are retained for
+resolution against the neighbor's local LLDP table.
+
+The Main gateway includes cached snapshots in telemetry. Successful snapshots
+are refreshed after 10 minutes; failed attempts after 3 minutes, with at most
+four concurrent collections per gateway batch. Cache files in
+`/var/lib/ispsupport-node/lldp/` are private to root. Main retains the last
+successful table on collection failure and marks it stale; a successful empty
+table removes previous observations. Multiple neighbors on one port are marked
+as observations of a shared segment rather than confirmed direct cables.
+
+For a manual collection of up to four due devices, run on the node:
+
+```sh
+python3 /ispsupport/node/scripts/lldp_collect.py --force
+```
+
+This prints operational topology data; keep it outside the public repository.
+
 The primary gateway supplies an explicit device batch through its SSH connection to the node. `scripts/monitor.py` runs ICMP, public-key SSH (`show version | no-more` for Junos), and SNMP v2c system OID checks on the node. The primary application does not connect to equipment. Devices with monitoring disabled are excluded from batches. Network inventory never triggers subnet scanning.
 
 SSH uses the node root account's existing private keys with a limited equipment username; equipment username `root` is rejected. First-seen device host keys are stored in `/var/lib/ispsupport-node/device_known_hosts`; changed host keys stop authentication. SNMP requires the `snmp` client package, installed by `scripts/install.sh`; no SNMP daemon is installed. Community values are read from a temporary mode-0600 file and are never passed in process arguments. Client configuration and credentials remain outside this repository.
