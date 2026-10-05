@@ -66,7 +66,7 @@ from urllib.parse import urlsplit
 
 ENV = dict(os.environ, LC_ALL="C", LANG="C", SYSTEMD_COLORS="0",
            SYSTEMD_PAGER="cat")
-VERSION = "3.1.1"
+VERSION = "3.2"
 for _credential_key in ("PPPOE_USERNAME", "PPPOE_PASSWORD"):
     ENV.pop(_credential_key, None)
 
@@ -187,6 +187,8 @@ def preflight(a):
     if os.geteuid() != 0:
         raise RuntimeError("Run as root (sudo).")
     required = ("ip", "pppd", "ping", "curl", "dig", "stat", "sysctl")
+    if getattr(a, "capture_control", False):
+        required += ("tcpdump", "timeout")
     missing = [x for x in required if not shutil.which(x)]
     if missing:
         raise RuntimeError("Missing commands: " + ", ".join(missing) +
@@ -262,6 +264,22 @@ def preflight(a):
             "pppd": version, "plugin": plugins[0]}
 
 
+def control_filter(mac):
+    """Capture only our PPP control traffic, excluding PAP requests and CHAP proofs."""
+    if not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac):
+        raise ValueError("Invalid capture MAC")
+    def payload(ethertype, protocol):
+        code = protocol + 2
+        controls = " or ".join("ether[{}:2] = {}".format(protocol, value)
+                               for value in ("0xc021", "0x8021", "0x8057"))
+        # Authentication results only: PAP Ack/Nak and CHAP Success/Failure.
+        auth = ("(ether[{p}:2] = 0xc023 and (ether[{c}] = 2 or ether[{c}] = 3)) or "
+                "(ether[{p}:2] = 0xc223 and (ether[{c}] = 3 or ether[{c}] = 4))").format(p=protocol, c=code)
+        return "(ether[{e}:2] = 0x8863 or (ether[{e}:2] = 0x8864 and ({p} or {a})))".format(e=ethertype, p=controls, a=auth)
+    return "ether host {} and ({} or ((ether[12:2] = 0x8100 or ether[12:2] = 0x88a8) and {}))".format(
+        mac, payload(12, 20), payload(16, 24))
+
+
 class Test:
     def __init__(self, a, before):
         self.a, self.before = a, before
@@ -271,6 +289,7 @@ class Test:
         self.out = Path(a.output or ("bras-test-" + a.bras + "-" +
                         time.strftime("%Y%m%d-%H%M%S") + "-" + token)).resolve()
         self.created, self.moved, self.proc = False, False, None
+        self.capture = None
         self.out_created, self.etc_created = False, False
         self.connected_monotonic = None
         self.probe_requested = False
@@ -330,6 +349,43 @@ class Test:
         self.report["checks"][name] = result
         print("{} (exit={})\n{}".format(name, rc, text.strip()), flush=True)
         return result
+
+    def start_capture(self, nic):
+        logpath = self.out / "control-capture.log"
+        pcap = self.out / "ppp-control.pcap"
+        packet_filter = control_filter(self.before["link"]["address"])
+        self.report["control_capture"] = {"pcap": str(pcap), "log": str(logpath),
+                                          "max_seconds": 75, "max_packets": 1000,
+                                          "filter": packet_filter}
+        with logpath.open("w") as log:
+            self.capture = subprocess.Popen(["ip", "netns", "exec", self.ns,
+                "timeout", "--signal=INT", "--kill-after=3", "75", "tcpdump",
+                "-Z", "root", "-n", "-p", "-U", "-s", "2048", "-c", "1000",
+                "-i", nic, "-w", str(pcap), packet_filter], stdin=subprocess.DEVNULL,
+                stdout=log, stderr=subprocess.STDOUT, env=ENV, start_new_session=True)
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            if self.capture.poll() is not None:
+                raise RuntimeError("Control capture exited; inspect control-capture.log")
+            if "listening on " in logpath.read_text(errors="replace"):
+                self.event("CONTROL_CAPTURE_READY", interface=nic, max_seconds=75)
+                save(self.out / "result.json", self.report)
+                return
+            time.sleep(0.05)
+        raise RuntimeError("Control capture did not become ready; PPP was not started")
+
+    def stop_capture(self):
+        if self.capture is None:
+            return
+        if self.capture.poll() is None:
+            self.capture.send_signal(signal.SIGINT)
+            try:
+                self.capture.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Only this capture's own session/process group, never other netns processes.
+                os.killpg(self.capture.pid, signal.SIGKILL)
+                self.capture.wait(timeout=3)
+        self.report["control_capture"]["process_exit_code"] = self.capture.returncode
 
     def prepare(self, username, password):
         if self.etc.exists() or self.etc.is_symlink() or os.path.lexists("/run/netns/" + self.ns):
@@ -413,6 +469,8 @@ PID 1 must be in the node's original network namespace for step 3.
             command(["ip", "-n", self.ns, "link", "add", "link", self.a.interface,
                      "name", nic, "type", "vlan", "id", self.a.vlan])
             command(["ip", "-n", self.ns, "link", "set", nic, "up"])
+        if getattr(self.a, "capture_control", False):
+            self.start_capture(nic)
         log = open(self.out / "pppd.log", "w")
         try:
             self.proc = subprocess.Popen(["ip", "netns", "exec", self.ns, "pppd"],
@@ -655,6 +713,10 @@ PID 1 must be in the node's original network namespace for step 3.
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait(timeout=3)
+        try:
+            self.stop_capture()
+        except Exception as e:
+            errors.append("Capture cleanup failed: " + str(e))
         if self.created:
             # Allow the private ip-down hook to finish before removing /etc/ppp.
             for _ in range(10):
@@ -741,6 +803,7 @@ def main():
     p.add_argument("--namespace", help="Explicit namespace name; must not already exist")
     p.add_argument("--hold", action="store_true", help="After initial checks, keep connected until stopped; no reconnect")
     p.add_argument("--skip-initial-tests", action="store_true", help="With --hold, connect without traffic probes; SIGUSR1 still requests tests")
+    p.add_argument("--capture-control", action="store_true", help="Capture our PPP control exchange for at most 75 s; requires tcpdump; excludes PAP requests and CHAP challenge/response")
     a = p.parse_args()
     if a.vlan is not None and not 1 <= a.vlan <= 4094:
         p.error("--vlan must be 1..4094")

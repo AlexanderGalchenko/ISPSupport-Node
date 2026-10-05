@@ -329,6 +329,31 @@ class Tests(unittest.TestCase):
             self.assertFalse(t.out_created)
             self.assertEqual(keep.read_text(), 'existing report')
 
+    def test_capture_failure_does_not_start_ppp_and_restores_interface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = self.arguments(root)
+            args.capture_control = True
+            before = {'link': copy.deepcopy(LINK), 'addresses': copy.deepcopy(ADDRS),
+                      'sysctls': {}, 'pppd': 'pppd version 2.4.9', 'plugin': '/usr/lib/pppd/2.4.9/pppoe.so'}
+            session = m.Test(args, before)
+            session.etc = root / 'private-etc'
+            node = FakeNode(session)
+            class FailedCapture:
+                returncode = 1
+                def poll(self): return 1
+            with patch.object(m, 'command', node.command), patch.object(m, 'ipjson', node.ipjson), \
+                    patch.object(m.subprocess, 'Popen', return_value=FailedCapture()) as launch:
+                with self.assertRaisesRegex(RuntimeError, 'Control capture exited'):
+                    session.prepare('example-user', 'example-password')
+                self.assertEqual(session.cleanup(), [])
+                self.assertEqual(launch.call_count, 1)
+                self.assertIn('tcpdump', launch.call_args.args[0])
+                self.assertNotIn('pppd', launch.call_args.args[0])
+            self.assertFalse(node.moved)
+            self.assertFalse(node.namespace)
+            self.assertTrue(session.report['interface_restored'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

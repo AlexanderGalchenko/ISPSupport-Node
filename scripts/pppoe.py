@@ -48,7 +48,7 @@ def load_profile(profile_name):
         raise ValueError('Profile schema must be 1')
     fields = {'schema', 'interface', 'expected_mac', 'bras_label', 'bras_address', 'bras_port',
               'device_id', 'transport_vlan', 'vlan', 'ac', 'service', 'env_file',
-              'ping', 'skip_initial_tests', 'expected_ac_mac', 'note'}
+              'ping', 'skip_initial_tests', 'expected_ac_mac', 'note', 'capture_control'}
     unknown = set(profile) - fields
     if unknown:
         raise ValueError('Unknown profile fields: ' + ', '.join(sorted(unknown)))
@@ -75,6 +75,8 @@ def load_profile(profile_name):
         raise ValueError('Invalid expected_ac_mac')
     if type(profile.get('skip_initial_tests', False)) is not bool:
         raise ValueError('skip_initial_tests must be boolean')
+    if type(profile.get('capture_control', False)) is not bool:
+        raise ValueError('capture_control must be boolean')
     if 'ping' in profile:
         targets = profile['ping']
         if not isinstance(targets, list) or not 1 <= len(targets) <= 5:
@@ -104,6 +106,8 @@ def arguments(profile_name, profile, check=False, output=None):
             args += ['--' + field, profile[field]]
     if profile.get('ping'):
         args += ['--ping', *profile['ping']]
+    if profile.get('capture_control', False):
+        args += ['--capture-control']
     if check:
         args += ['--check']
     else:

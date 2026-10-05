@@ -44,6 +44,14 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(args[args.index('--vlan') + 1], '456')
         self.assertNotIn('--untagged', args)
 
+    def test_control_capture_is_opt_in_and_boolean(self):
+        self.assertNotIn('--capture-control', pppoe.arguments('lab', self.load(), check=True))
+        self.profile['capture_control'] = True
+        self.assertIn('--capture-control', pppoe.arguments('lab', self.load(), check=True))
+        self.profile['capture_control'] = 'true'
+        with self.assertRaisesRegex(ValueError, 'capture_control must be boolean'):
+            self.load()
+
     def test_missing_vlan_and_unexpected_fields_fail_closed(self):
         del self.profile['vlan']
         with self.assertRaisesRegex(ValueError, 'Set vlan'):

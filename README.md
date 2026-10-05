@@ -70,6 +70,14 @@ Ping/HTTPS не измеряют тарифную скорость и не по�
 Логи закрыты для других пользователей и могут содержать логин.
 Диагностика: `journalctl -u ispsupport-pppoe@lab -n 80 --no-pager`.
 
+Для диагностики переговоров установите в локальном профиле `capture_control: true`
+перед следующим подключением (нужен `tcpdump`). Дамп `ppp-control.pcap` снимается
+в namespace до запуска pppd, максимум 75 секунд/1000 пакетов. Фильтр ограничен
+MAC тестового клиента, PPPoE Discovery, LCP/IPCP/IPv6CP и результатами аутентификации;
+PAP-запросы, CHAP challenge/response и пользовательский IP-трафик исключены.
+Просмотр от root: `tcpdump -nn -e -tttt -vvv -r /path/to/run/ppp-control.pcap`.
+После диагностики верните `capture_control: false`. Глобальный debug BRAS не нужен.
+
 Обычная остановка возвращает NIC, сверяет маршруты/rules/DNS хоста и сохраняет
 `cleanup_ok`. При SIGKILL/падении питания следуйте `RECOVERY.txt`; не удаляйте
 namespace до завершения оставшихся процессов. Для отката остановите профиль,
