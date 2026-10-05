@@ -275,6 +275,15 @@ class Tests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(report['failure_stage'], 'AUTHENTICATION')
 
+    def test_peer_termination_after_authentication_is_not_a_discovery_failure(self):
+        with self.held_session() as (t, node):
+            with (t.out / 'pppd.log').open('a') as stream:
+                stream.write('CHAP authentication succeeded\nLCP terminated by peer\n')
+            t.log_summary()
+            self.assertTrue(t.report['authentication_succeeded'])
+            self.assertTrue(t.report['terminated_before_ipv4'])
+            self.assertEqual(t.report['failure_stage'], 'PPP_PEER_TERMINATION')
+
     def test_missing_peer_dns_is_not_green(self):
         rc, report = self.scenario(no_dns=True)
         self.assertEqual(rc, 1)

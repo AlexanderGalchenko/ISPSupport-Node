@@ -66,7 +66,7 @@ from urllib.parse import urlsplit
 
 ENV = dict(os.environ, LC_ALL="C", LANG="C", SYSTEMD_COLORS="0",
            SYSTEMD_PAGER="cat")
-VERSION = "3.1"
+VERSION = "3.1.1"
 for _credential_key in ("PPPOE_USERNAME", "PPPOE_PASSWORD"):
     ENV.pop(_credential_key, None)
 
@@ -628,12 +628,17 @@ PID 1 must be in the node's original network namespace for step 3.
         if not self.out_created or not logpath.exists():
             return
         text = logpath.read_text(errors="replace")
+        self.report["authentication_succeeded"] = bool(re.search(r"(?:CHAP|PAP) authentication succeeded", text, re.I))
         if re.search(r"authentication failed|authentication failure|access denied", text, re.I):
             self.report["failure_stage"] = "AUTHENTICATION"
         elif re.search(r"Timeout waiting for PADO|Unable to complete PPPoE Discovery", text, re.I):
             self.report["failure_stage"] = "PPPOE_DISCOVERY"
         elif re.search(r"IPCP.*(timeout|terminated)|Could not determine.*IP", text, re.I):
             self.report["failure_stage"] = "IPCP"
+        elif re.search(r"LCP terminated by peer", text, re.I):
+            self.report["failure_stage"] = "PPP_PEER_TERMINATION"
+            self.report["termination_reason"] = "Peer terminated LCP"
+            self.report["terminated_before_ipv4"] = self.connected_monotonic is None
         mac = re.search(r"Connected to ([0-9a-f:]{17})", text, re.I)
         if mac:
             self.report["observed_ac_mac"] = mac.group(1).lower()
