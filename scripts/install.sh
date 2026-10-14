@@ -10,6 +10,7 @@ if ! command -v snmpget >/dev/null; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends snmp
 fi
 install -d -m 750 /etc/ispsupport-node /var/lib/ispsupport-node
+python3 "$node_root/scripts/install-ftp.py"
 install -m 644 "$node_root/systemd/ispsupport-node-update.service" /etc/systemd/system/
 install -m 644 "$node_root/systemd/ispsupport-node-update.timer" /etc/systemd/system/
 systemctl daemon-reload
