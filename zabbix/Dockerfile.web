@@ -1,0 +1,64 @@
+# Rebuild PHP from the signed 8.5.12 release until Alpine publishes fixed packages.
+# Zabbix, its entrypoint, configuration and non-PHP packages stay on this digest.
+FROM zabbix/zabbix-web-nginx-pgsql@sha256:f8fe2e6de2968425877a18a4865b6127442a2f40c1ff15b6c77b119bf9b1498a AS php-build
+USER root
+RUN apk add --no-cache curl build-base autoconf bison re2c acl-dev argon2-dev \
+    libedit-dev libxml2-dev pcre2-dev zlib-dev curl-dev freetype-dev \
+    libjpeg-turbo-dev libpng-dev libwebp-dev libavif-dev libxpm-dev gettext-dev \
+    openldap-dev cyrus-sasl-dev oniguruma-dev openssl-dev libpq-dev
+RUN curl -4 --fail --location --retry 2 --connect-timeout 10 --max-time 180 \
+    https://codeload.github.com/php/php-src/tar.gz/136e049ac10b032c83018e65b63b6df858943750 -o /tmp/php-src.tar.gz \
+ && echo 'e5537fb5d9dda0f193da728f9dc8ba79bc115e915a91a30d35669c84d114cb76  /tmp/php-src.tar.gz' | sha256sum -c -
+RUN apk add --no-cache linux-headers
+RUN set -eux; \
+    mkdir -p /usr/src/php; \
+    tar -xzf /tmp/php-src.tar.gz -C /usr/src/php --strip-components=1; \
+    cd /usr/src/php; \
+    ./buildconf --force; \
+    CFLAGS="-O2 -fstack-protector-strong -fPIC" \
+    PHP_BUILD_PROVIDER="ISP Support security build from upstream PHP 8.5.12" \
+    EXTENSION_DIR=/usr/lib/php85/modules ./configure \
+      --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear \
+      --prefix=/usr --program-suffix=85 --libdir=/usr/lib/php85 \
+      --datadir=/usr/share/php85 --sysconfdir=/etc/php85 --localstatedir=/var \
+      --with-layout=GNU --with-pic --disable-rpath --disable-short-tags \
+      --with-config-file-path=/etc/php85 --with-config-file-scan-dir=/etc/php85/conf.d \
+      --enable-fpm --with-fpm-acl --with-fpm-user=zabbix --with-fpm-group=zabbix \
+      --with-libxml --with-zlib --with-external-pcre --enable-filter \
+      --with-libedit --without-readline --with-password-argon2 \
+      --enable-bcmath=shared --enable-ctype=shared --with-curl=shared \
+      --enable-dom=shared --enable-fileinfo=shared --enable-gd=shared \
+      --with-avif --with-freetype --with-jpeg --with-webp --with-xpm \
+      --with-gettext=shared --with-ldap=shared --with-ldap-sasl \
+      --enable-mbstring=shared --with-openssl=shared --with-system-ciphers \
+      --with-openssl-argon2 --with-pgsql=shared --enable-session=shared \
+      --enable-simplexml=shared --enable-sockets=shared \
+      --enable-xmlreader=shared --enable-xmlwriter=shared; \
+    make -j2; \
+    mkdir -p /opt/php-runtime/usr/sbin /opt/php-runtime/usr/bin /opt/php-runtime/usr/lib/php85/modules; \
+    install -m755 sapi/fpm/php-fpm /opt/php-runtime/usr/sbin/php-fpm85; \
+    install -m755 sapi/cli/php /opt/php-runtime/usr/bin/php85; \
+    cp modules/*.so /opt/php-runtime/usr/lib/php85/modules/; \
+    find /opt/php-runtime -type f -exec strip --strip-all '{}' +; \
+    /opt/php-runtime/usr/bin/php85 -n -r 'exit(PHP_VERSION === "8.5.12" ? 0 : 1);'
+
+FROM zabbix/zabbix-web-nginx-pgsql@sha256:f8fe2e6de2968425877a18a4865b6127442a2f40c1ff15b6c77b119bf9b1498a
+USER root
+LABEL org.opencontainers.image.description="Zabbix 7.0 web with PHP 8.5.12 security runtime" \
+      io.ispsupport.php.version="8.5.12" \
+      io.ispsupport.php.source-commit="136e049ac10b032c83018e65b63b6df858943750"
+COPY --from=php-build /opt/php-runtime/ /opt/php-runtime/
+RUN set -eux; \
+    apk add --no-cache --virtual .php-scan-deps pax-utils; \
+    deps="$(scanelf --needed --nobanner --format '%n#p' --recursive /opt/php-runtime | tr ',' '\n' | sort -u | sed 's/^/so:/')"; \
+    apk add --no-cache --virtual .ispsupport-php85-runtime $deps; \
+    cp -a /etc/php85 /tmp/php85-config; \
+    apk del $(apk info | grep '^php85'); \
+    mkdir -p /etc/php85; \
+    cp -a /tmp/php85-config/. /etc/php85/; \
+    cp -a /opt/php-runtime/usr/. /usr/; \
+    rm -rf /opt/php-runtime /tmp/php85-config; \
+    apk del .php-scan-deps; \
+    php85 -r 'exit(PHP_VERSION === "8.5.12" ? 0 : 1);'; \
+    php-fpm85 -v
+USER 1997

@@ -36,7 +36,7 @@ services:
     mem_limit: 1g
     logging: *logging
   web:
-    image: ${ISP_ZABBIX_WEB_IMAGE:-zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest}
+    image: ${ISP_ZABBIX_WEB_IMAGE:-ispsupport-zabbix-web:security-20261021-8.5.12}
     restart: unless-stopped
     env_file: /etc/ispsupport-node/zabbix.env
     environment:
