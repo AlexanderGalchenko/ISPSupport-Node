@@ -15,7 +15,7 @@ IF_SPEED = '.1.3.6.1.2.1.31.1.1.1.15'
 IF_ALIAS = '.1.3.6.1.2.1.31.1.1.1.18'
 PHYSICAL = re.compile(r'^(?:ge|xe|et|fe)-\d+/\d+/\d+(?::\d+)?$')
 LAG = re.compile(r'^ae\d+$')
-FORBIDDEN = re.compile(r'^(?:demux|pp\d|pppoe|ippp|dyn|vtep|dsc|jsrv|pfe|pfh|lc-|lsi|mtun|tap)', re.I)
+FORBIDDEN = re.compile(r'^(?:demux|pp\d|pppoe|ippp|dyn|vtep|dsc|jsrv|pfe|pfh|lc-|lsi|mtun|tap|Virtual-(?:Access|Template)|Vi\d)', re.I)
 SAFE_NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_./:\-]{0,79}$')
 MAX_INTERFACES = 1000
 
@@ -217,3 +217,4 @@ def discover(device, previous=None):
     if not ports:
         raise RuntimeError('No eligible interfaces returned; previous inventory preserved')
     return ports, {'static_verified': verified, 'message': warning, 'name_table_count': len(table), 'selected_count': len(ports)}
+

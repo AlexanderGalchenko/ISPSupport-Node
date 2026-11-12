@@ -26,8 +26,25 @@ class SubscriberTest(unittest.TestCase):
         self.assertEqual(api.calls[-1],('item.update',{'itemid':'20','status':1}))
         self.assertFalse(entry['subscriber_enabled'])
     def test_unsupported_devices_do_not_receive_juniper_oid(self):
-        api=Api();sync_subscribers(api,{'host_id':'10','interface_id':'11'},{'roles':['bras'],'os_name':'IOS'})
+        api=Api();sync_subscribers(api,{'host_id':'10','interface_id':'11'},{'roles':['bras'],'os_name':'RouterOS'})
         self.assertEqual(api.calls,[])
+    def test_cisco_pppoe_uses_gauge_and_repeated_sync_is_idle(self):
+        api=Api();entry={'host_id':'10','interface_id':'11'}
+        device={'roles':['bras'],'os_name':'Cisco IOS XE','ssh_profile':'cisco_ios'}
+        sync_subscribers(api,entry,device)
+        definition=api.calls[-1][1]
+        self.assertEqual(definition['snmp_oid'],'.1.3.6.1.4.1.9.9.194.1.1.1.0')
+        self.assertEqual(definition['value_type'],3)
+        self.assertEqual(definition['delay'],'60s')
+        self.assertNotIn('preprocessing',definition)
+        api.calls=[];sync_subscribers(api,entry,device)
+        self.assertEqual(api.calls,[])
+    def test_platform_change_updates_existing_item_without_deleting_history(self):
+        api=Api([{'itemid':'20'}]);entry={'host_id':'10','interface_id':'11','subscriber_enabled':True,'subscriber_oid':'.1.3.6.1.4.1.2636.3.64.1.1.1.2.0'}
+        sync_subscribers(api,entry,{'roles':['bras'],'os_name':'Cisco IOS XE'})
+        self.assertEqual(api.calls[-1][0],'item.update')
+        self.assertEqual(api.calls[-1][1]['itemid'],'20')
+        self.assertEqual(entry['subscriber_oid'],'.1.3.6.1.4.1.9.9.194.1.1.1.0')
     def test_zero_subscribers_is_published_and_stale_state_is_excluded(self):
         api=Api([{'hostid':'10','lastvalue':'0','lastclock':'1000','state':'0','status':'0'}])
         config={'snmp_devices':[{'id':4,'roles':['bras']}]} 
@@ -39,3 +56,4 @@ class SubscriberTest(unittest.TestCase):
         self.assertEqual(next(p for m,p in api.calls if m=='history.get')['history'],3)
         self.assertEqual([p['rx'] for p in result['points'] if p['rx'] is not None],[0.0])
 if __name__=='__main__':unittest.main()
+

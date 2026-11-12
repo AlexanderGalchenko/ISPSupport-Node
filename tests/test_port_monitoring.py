@@ -12,6 +12,12 @@ from zabbix_api import private_json
 
 
 class PortMonitoringTest(unittest.TestCase):
+    def test_cisco_dynamic_sessions_do_not_fill_physical_inventory(self):
+        for name in ('Virtual-Access1', 'Virtual-Access2.987', 'Virtual-Template1', 'Vi2.123'):
+            self.assertIsNone(classify(name, False, set()))
+        self.assertEqual('physical', classify('Te0/1/0', False, set()))
+        self.assertEqual('physical', classify('TenGigabitEthernet0/2/0', False, set()))
+
     def test_junos_static_units_exclude_inactive_and_subscriber_interfaces(self):
         xml = '''<rpc-reply xmlns="urn:junos"><configuration><interfaces>
         <interface><name>et-0/0/0</name><unit><name>100</name></unit>
@@ -106,3 +112,4 @@ class PortMonitoringTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

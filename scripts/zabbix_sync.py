@@ -80,20 +80,34 @@ def sync_host(api, config, device, old, group_id):
     return {**old, 'host_id': host_id, 'interface_id': interface_id, 'config_hash': fingerprint, 'enabled': True, 'last_attempt': 0}
 
 
+def subscriber_oid(device):
+    if 'bras' not in device.get('roles', []):
+        return None
+    platform = (device.get('os_name') or '').strip().lower()
+    profile = device.get('ssh_profile')
+    if profile == 'junos' or platform == 'junos':
+        return '.1.3.6.1.4.1.2636.3.64.1.1.1.2.0'
+    if profile == 'cisco_ios' or platform in ('ios', 'ios xe', 'cisco ios', 'cisco ios xe', 'ios-xe'):
+        return '.1.3.6.1.4.1.9.9.194.1.1.1.0'
+    return None
+
+
 def sync_subscribers(api, entry, device):
-    wanted = 'bras' in device.get('roles', []) and (device.get('os_name') or '').lower() == 'junos'
-    if entry.get('subscriber_enabled', False) is wanted:
+    oid = subscriber_oid(device)
+    wanted = oid is not None
+    if entry.get('subscriber_enabled', False) is wanted and entry.get('subscriber_oid') == oid:
         return
     items = api.call('item.get', {'hostids': [entry['host_id']], 'filter': {'key_': 'isp.device.subscribers'}, 'output': ['itemid']})
     definition = {'name': 'Активные абонентские сессии', 'key_': 'isp.device.subscribers',
                   'hostid': entry['host_id'], 'interfaceid': entry['interface_id'], 'type': 20, 'value_type': 3,
-                  'snmp_oid': '.1.3.6.1.4.1.2636.3.64.1.1.1.2.0', 'delay': '60s', 'history': '14d', 'trends': '365d',
+                  'snmp_oid': oid, 'delay': '60s', 'history': '14d', 'trends': '365d',
                   'status': 0, 'tags': [{'tag': 'component', 'value': 'subscribers'}, {'tag': 'isp:managed', 'value': '1'}]}
     if wanted:
         api.call('item.update', {'itemid': items[0]['itemid'], **definition}) if items else api.call('item.create', definition)
     elif items:
         api.call('item.update', {'itemid': items[0]['itemid'], 'status': 1})
     entry['subscriber_enabled'] = wanted
+    entry['subscriber_oid'] = oid
 
 
 def subscriber_snapshot(api, config, entries):
@@ -226,3 +240,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
