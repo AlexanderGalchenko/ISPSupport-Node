@@ -6,11 +6,12 @@ import ipaddress
 import json
 from pathlib import Path
 import time
-from interface_discovery import discover, MAX_INTERFACES
+from interface_discovery import discover, Snmp, MAX_INTERFACES
 from zabbix_api import Zabbix, SETTINGS, private_json
 
 STATE = Path('/var/lib/ispsupport-node/zabbix-inventory.json')
 CONFIG = Path('/etc/ispsupport-node/node.json')
+HOST_SNMP = Path('/etc/ispsupport-node/host-snmp.json')
 METRICS = {
     'rx': ('.1.3.6.1.2.1.31.1.1.1.6', 0, 'bps'),
     'tx': ('.1.3.6.1.2.1.31.1.1.1.10', 0, 'bps'),
@@ -30,7 +31,7 @@ def host_name(device_id):
     return 'isp-device-' + str(int(device_id))
 
 
-def item_definition(host_id, interface_id, port, metric):
+def item_definition(host_id, interface_id, port, metric, poll_from_host=False):
     oid, value_type, units = METRICS[metric]
     preprocessing = []
     if metric in ('rx', 'tx', 'in_errors', 'out_errors'):
@@ -44,9 +45,9 @@ def item_definition(host_id, interface_id, port, metric):
     if preprocessing:
         # Changing the ifIndex changes preprocessing, resetting the previous-counter cache.
         preprocessing.append({'type': 21, 'params': 'return value; // ifIndex ' + str(port['index']), 'error_handler': 0})
-    return {'hostid': str(host_id), 'interfaceid': str(interface_id), 'name': port['name'] + ': ' + metric,
-            'key_': item_key(port['name'], metric), 'type': 20, 'value_type': value_type,
-            'snmp_oid': oid + '.' + str(port['index']), 'delay': '60s', 'history': '14d', 'trends': '365d',
+    return {'hostid': str(host_id), 'interfaceid': '0' if poll_from_host else str(interface_id), 'name': port['name'] + ': ' + metric,
+            'key_': item_key(port['name'], metric), 'type': 2 if poll_from_host else 20, 'value_type': value_type,
+            'snmp_oid': '' if poll_from_host else oid + '.' + str(port['index']), 'delay': '0' if poll_from_host else '60s', 'history': '14d', 'trends': '365d',
             'units': units, 'status': 0, 'preprocessing': preprocessing,
             'tags': [{'tag': 'component', 'value': 'interfaces'}, {'tag': 'interface', 'value': port['name']},
                      {'tag': 'isp:managed', 'value': '1'}, {'tag': 'metric', 'value': metric}]}
@@ -95,12 +96,13 @@ def subscriber_oid(device):
 def sync_subscribers(api, entry, device):
     oid = subscriber_oid(device)
     wanted = oid is not None
-    if entry.get('subscriber_enabled', False) is wanted and entry.get('subscriber_oid') == oid:
+    host_poll = bool(device.get('poll_from_host'))
+    if entry.get('subscriber_enabled', False) is wanted and entry.get('subscriber_oid') == oid and entry.get('subscriber_poll_from_host', False) == host_poll:
         return
     items = api.call('item.get', {'hostids': [entry['host_id']], 'filter': {'key_': 'isp.device.subscribers'}, 'output': ['itemid']})
     definition = {'name': 'Активные абонентские сессии', 'key_': 'isp.device.subscribers',
-                  'hostid': entry['host_id'], 'interfaceid': entry['interface_id'], 'type': 20, 'value_type': 3,
-                  'snmp_oid': oid, 'delay': '60s', 'history': '14d', 'trends': '365d',
+                  'hostid': entry['host_id'], 'interfaceid': '0' if host_poll else entry['interface_id'], 'type': 2 if host_poll else 20, 'value_type': 3,
+                  'snmp_oid': '' if host_poll else oid, 'delay': '0' if host_poll else '60s', 'history': '14d', 'trends': '365d',
                   'status': 0, 'tags': [{'tag': 'component', 'value': 'subscribers'}, {'tag': 'isp:managed', 'value': '1'}]}
     if wanted:
         if items:
@@ -112,6 +114,7 @@ def sync_subscribers(api, entry, device):
         api.call('item.update', {'itemid': items[0]['itemid'], 'status': 1})
     entry['subscriber_enabled'] = wanted
     entry['subscriber_oid'] = oid
+    entry['subscriber_poll_from_host'] = host_poll
 
 
 def subscriber_snapshot(api, config, entries):
@@ -125,16 +128,16 @@ def subscriber_snapshot(api, config, entries):
             for r in rows if r.get('state') == '0' and r.get('status') == '0' and int(r.get('lastclock', 0)) > 0]
 
 
-def sync_items(api, entry, discovered):
+def sync_items(api, entry, discovered, poll_from_host=False):
     old_ports = entry.get('ports', {})
     existing = api.call('item.get', {'hostids': [entry['host_id']], 'output': ['itemid', 'key_', 'status'], 'search': {'key_': 'isp.if.'}, 'startSearch': True})
     by_key = {row['key_']: row for row in existing}
     create, update, desired = [], [], set()
     for name, port in discovered.items():
         prior = old_ports.get(name, {})
-        changed = prior.get('index') != port['index'] or prior.get('speed_bps') != port.get('speed_bps')
+        changed = prior.get('index') != port['index'] or prior.get('speed_bps') != port.get('speed_bps') or entry.get('interface_poll_from_host', False) != poll_from_host
         for metric in METRICS:
-            item = item_definition(entry['host_id'], entry['interface_id'], port, metric)
+            item = item_definition(entry['host_id'], entry['interface_id'], port, metric, poll_from_host)
             key = item['key_']
             desired.add(key)
             if key not in by_key:
@@ -159,7 +162,35 @@ def sync_items(api, entry, discovered):
         # Retain recent missing entries; their Zabbix items/history are never deleted.
         missing = sorted((p for p in ports.values() if not p['present']), key=lambda p: p.get('last_seen', 0), reverse=True)
         ports = {p['name']: p for p in list(discovered.values()) + missing[:MAX_INTERFACES]}
+    entry['interface_poll_from_host'] = poll_from_host
     return ports
+
+
+def push_host_snmp(api, entry, device):
+    """Optional host-side polling when NAT rewrites response tuples across the Docker bridge."""
+    oids = {}
+    if entry.get('subscriber_enabled'):
+        oids['isp.device.subscribers'] = subscriber_oid(device)
+    for name, port in entry.get('ports', {}).items():
+        if port.get('present'):
+            for metric, (base, _, _) in METRICS.items():
+                oids[item_key(name, metric)] = base + '.' + str(port['index'])
+    rows = api.call('item.get', {'hostids': [entry['host_id']], 'filter': {'type': 2, 'status': 0}, 'output': ['itemid', 'key_']})
+    items = {row['itemid']: oids[row['key_']] for row in rows if row['key_'] in oids and oids[row['key_']]}
+    client = Snmp(device)
+    values = {}
+    wanted = list(dict.fromkeys(items.values()))
+    for start in range(0, len(wanted), 24):
+        values.update(client.query(wanted[start:start + 24]))
+    clock = int(time.time())
+    data = [{'itemid': item, 'clock': clock, 'value': values[oid]} for item, oid in items.items()
+            if str(values.get(oid, '')).isdecimal() and int(values[oid]) <= 18446744073709551615]
+    if not data:
+        raise RuntimeError('Host SNMP returned no numeric measurements')
+    reply = api.call('history.push', data)
+    if reply.get('response') != 'success' or any(row.get('error') for row in reply.get('data', [])):
+        raise RuntimeError('Zabbix did not accept all host SNMP measurements')
+    entry['host_poll_last_success'] = clock
 
 
 def reconcile(config, state, api, group_id):
@@ -187,8 +218,10 @@ def reconcile(config, state, api, group_id):
                 budget -= 1
                 entry['last_attempt'] = now
                 ports, information = discover(device, entry.get('ports'))
-                entry['ports'] = sync_items(api, entry, ports)
+                entry['ports'] = sync_items(api, entry, ports, bool(device.get('poll_from_host')))
                 entry.update(last_success=now, discovery=information, error=None)
+            if device.get('poll_from_host'):
+                push_host_snmp(api, entry, device)
         except Exception as error:
             # Never serialize command output, device configuration, or API parameters.
             entry['error'] = 'Обнаружение не завершено: проверьте доступ SNMP и состояние Zabbix. Предыдущие порты и история сохранены.'
@@ -235,6 +268,11 @@ def main():
         except BlockingIOError:
             return
         config = json.loads(CONFIG.read_text())
+        host_ids = json.loads(HOST_SNMP.read_text()).get('device_ids', []) if HOST_SNMP.exists() else []
+        if not isinstance(host_ids, list) or len(host_ids) > 50 or any(type(value) is not int or value < 1 for value in host_ids):
+            raise ValueError('Invalid host SNMP device allowlist')
+        for device in config.get('snmp_devices', []):
+            device['poll_from_host'] = device['id'] in host_ids
         settings = json.loads(SETTINGS.read_text())
         state = json.loads(STATE.read_text()) if STATE.exists() else {}
         updated = reconcile(config, state, Zabbix.local(), settings['group_id'])
