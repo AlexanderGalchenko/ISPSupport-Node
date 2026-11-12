@@ -44,6 +44,7 @@ class SubscriberTest(unittest.TestCase):
         sync_subscribers(api,entry,{'roles':['bras'],'os_name':'Cisco IOS XE'})
         self.assertEqual(api.calls[-1][0],'item.update')
         self.assertEqual(api.calls[-1][1]['itemid'],'20')
+        self.assertNotIn('hostid',api.calls[-1][1])
         self.assertEqual(entry['subscriber_oid'],'.1.3.6.1.4.1.9.9.194.1.1.1.0')
     def test_zero_subscribers_is_published_and_stale_state_is_excluded(self):
         api=Api([{'hostid':'10','lastvalue':'0','lastclock':'1000','state':'0','status':'0'}])

@@ -103,7 +103,11 @@ def sync_subscribers(api, entry, device):
                   'snmp_oid': oid, 'delay': '60s', 'history': '14d', 'trends': '365d',
                   'status': 0, 'tags': [{'tag': 'component', 'value': 'subscribers'}, {'tag': 'isp:managed', 'value': '1'}]}
     if wanted:
-        api.call('item.update', {'itemid': items[0]['itemid'], **definition}) if items else api.call('item.create', definition)
+        if items:
+            definition.pop('hostid')
+            api.call('item.update', {'itemid': items[0]['itemid'], **definition})
+        else:
+            api.call('item.create', definition)
     elif items:
         api.call('item.update', {'itemid': items[0]['itemid'], 'status': 1})
     entry['subscriber_enabled'] = wanted
