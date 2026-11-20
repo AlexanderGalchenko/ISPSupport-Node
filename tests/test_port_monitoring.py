@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -57,6 +58,31 @@ class PortMonitoringTest(unittest.TestCase):
         self.assertIsNone(ports['et-0/0/1']['aggregate'])
         self.assertGreater(ports['et-0/0/1']['aggregate_checked_at'], 123)
         self.assertTrue(status['static_verified'])
+
+    def test_opted_in_huawei_includes_typed_and_named_physical_aggregates(self):
+        names = ['Eth-Trunk1', 'Eth-Trunk2', 'Eth-Trunk3', 'Vlanif20', 'Eth-Trunk1.2', 'GE0/0/1']
+        types = [53, 6, 161, 53, 53, 6]
+        table = {IF_NAME+'.'+str(i): name for i, name in enumerate(names, 1)}
+        attrs = {IF_TYPE+'.'+str(i): str(kind) for i, kind in enumerate(types, 1)}
+        attrs.update({IF_SPEED+'.'+str(i): '0' for i in range(1, len(types)+1)})
+        device = {'host': '192.0.2.10', 'snmp_community': 'fixture', 'ssh_profile': 'huawei_vrp'}
+        for enabled in ['0', '1']:
+            with patch.dict(os.environ, {'ISP_FULL_INTERFACE_TYPES': enabled}), patch.object(Snmp, 'query', side_effect=[table, attrs]):
+                ports, _ = discover(device)
+            self.assertNotIn('Vlanif20', ports)
+            self.assertNotIn('Eth-Trunk1.2', ports)
+            self.assertEqual('physical', ports['GE0/0/1']['kind'])
+            self.assertEqual('lag', ports['Eth-Trunk3']['kind'])
+            if enabled == '1':
+                self.assertEqual('lag', ports['Eth-Trunk1']['kind'])
+                self.assertEqual('lag', ports['Eth-Trunk2']['kind'])
+            else:
+                self.assertNotIn('Eth-Trunk1', ports)
+                self.assertEqual('physical', ports['Eth-Trunk2']['kind'])
+        self.assertIsNone(classify('fxp0', True, set()))
+        self.assertEqual('physical', classify('fxp0', True, set(), include_management=True))
+        self.assertIsNone(classify('fxp0', True, set(), {'xe-0/0/0'}, include_management=True))
+        self.assertIsNone(classify('fxp0.0', True, set(), include_management=True))
 
     def test_fixed_inventory_and_root_ssh_are_not_used_for_unknown_interfaces(self):
         self.assertIsNone(classify('et-0/0/1', True, set(), {'et-0/0/0'}))

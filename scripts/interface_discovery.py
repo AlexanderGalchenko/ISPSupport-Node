@@ -132,13 +132,13 @@ def read_static_units(device):
     return read_interface_configuration(device)['units']
 
 
-def classify(name, junos, allowed_units, fixed_names=None):
+def classify(name, junos, allowed_units, fixed_names=None, include_management=False):
     if not SAFE_NAME.fullmatch(name) or FORBIDDEN.match(name):
         return None
     if fixed_names is not None and name not in fixed_names:
         return None
     if junos:
-        if PHYSICAL.fullmatch(name):
+        if PHYSICAL.fullmatch(name) or (include_management and re.fullmatch(r'fxp[0-9]+', name)):
             return 'physical'
         if LAG.fullmatch(name):
             return 'lag'
@@ -176,11 +176,13 @@ def discover(device, previous=None):
             allowed = {name for name, port in previous.items() if port.get('kind') == 'unit' and port.get('static_verified')}
             warning = 'Конфигурация интерфейсов не подтверждена по SSH; предыдущие юниты и состав AE сохранены'
     fixed = set(device.get('fixed_ports', [])) if not device.get('discover_ports', True) else None
+    full = fixed is None and os.environ.get('ISP_FULL_INTERFACE_TYPES') == '1'
+    huawei = profile == 'huawei_vrp' or ((not profile or profile == 'auto') and (device.get('os_name') or '').lower() == 'vrp')
     selected = []
     for oid, name in table.items():
         if not oid.startswith(IF_NAME + '.'):
             continue
-        kind = classify(name, junos, allowed, fixed)
+        kind = classify(name, junos, allowed, fixed, include_management=full)
         if kind:
             selected.append({'name': name, 'index': int(oid.rsplit('.', 1)[1]), 'kind': kind})
     if len(selected) > MAX_INTERFACES:
@@ -197,7 +199,9 @@ def discover(device, previous=None):
             except ValueError:
                 continue
             if not junos:
-                if if_type == 161:
+                # VRP can expose Eth-Trunk as ethernetCsmacd (6) or propVirtual (53).
+                named_lag = full and huawei and re.fullmatch(r'Eth-Trunk[0-9]+', port['name'], re.IGNORECASE)
+                if if_type == 161 or (named_lag and if_type in (6, 53)):
                     port['kind'] = 'lag'
                 elif if_type != 6 and port['kind'] != 'unit':
                     continue
